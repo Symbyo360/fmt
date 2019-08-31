@@ -156,15 +156,15 @@ class format_preparation_handler : public internal::error_handler {
 };
 
 template <typename Format, typename PreparedPartsProvider, typename... Args>
-class prepared_format {
+class compiled_format {
  public:
   using char_type = char_t<Format>;
   using format_part_t = format_part<char_type>;
 
-  constexpr prepared_format(Format f)
+  constexpr compiled_format(Format f)
       : format_(std::move(f)), parts_provider_(to_string_view(format_)) {}
 
-  prepared_format() = delete;
+  compiled_format() = delete;
 
   using context = buffer_context<char_type>;
 
@@ -353,14 +353,6 @@ template <typename Parts> class compiletime_prepared_parts_collector {
 };
 
 template <typename PartsContainer, typename Char>
-FMT_CONSTEXPR PartsContainer prepare_parts(basic_string_view<Char> format) {
-  PartsContainer parts;
-  internal::parse_format_string</*IS_CONSTEXPR=*/false>(
-      format, format_preparation_handler<Char, PartsContainer>(format, parts));
-  return parts;
-}
-
-template <typename PartsContainer, typename Char>
 FMT_CONSTEXPR PartsContainer
 prepare_compiletime_parts(basic_string_view<Char> format) {
   using collector = compiletime_prepared_parts_collector<PartsContainer>;
@@ -372,30 +364,30 @@ prepare_compiletime_parts(basic_string_view<Char> format) {
   return parts;
 }
 
-template <typename PartsContainer> class runtime_parts_provider {
+template <typename Char> class runtime_parts_provider {
  public:
-  runtime_parts_provider() = delete;
-  template <typename Char>
-  runtime_parts_provider(basic_string_view<Char> format)
-      : parts_(prepare_parts<PartsContainer>(format)) {}
+  using parts_container = std::vector<internal::format_part<Char>>;
 
-  const PartsContainer& parts() const { return parts_; }
+  runtime_parts_provider(basic_string_view<Char> format) {
+    internal::parse_format_string<false>(
+        format,
+        format_preparation_handler<Char, parts_container>(format, parts_));
+  }
+
+  const parts_container& parts() const { return parts_; }
 
  private:
-  PartsContainer parts_;
+  parts_container parts_;
 };
 
-template <typename Format, typename PartsContainer>
-struct compiletime_parts_provider {
-  compiletime_parts_provider() = delete;
-  template <typename Char>
-  FMT_CONSTEXPR compiletime_parts_provider(basic_string_view<Char>) {}
+template <typename Format> struct compiletime_parts_provider {
+  using parts_container =
+      typename internal::compiletime_prepared_parts_type_provider<Format>::type;
 
-  const PartsContainer& parts() const {
-    static FMT_CONSTEXPR_DECL const PartsContainer prepared_parts =
-        prepare_compiletime_parts<PartsContainer>(
-            internal::to_string_view(Format{}));
-
+  const parts_container& parts() const {
+    static FMT_CONSTEXPR_DECL const parts_container prepared_parts =
+        prepare_compiletime_parts<parts_container>(
+            internal::to_string_view(Format()));
     return prepared_parts;
   }
 };
@@ -404,21 +396,16 @@ struct compiletime_parts_provider {
 #if FMT_USE_CONSTEXPR
 template <typename... Args, typename S,
           FMT_ENABLE_IF(is_compile_string<S>::value)>
-FMT_CONSTEXPR auto compile(S format_str) -> internal::prepared_format<
-    S,
-    internal::compiletime_parts_provider<
-        S,
-        typename internal::compiletime_prepared_parts_type_provider<S>::type>,
-    Args...> {
+FMT_CONSTEXPR auto compile(S format_str)
+    -> internal::compiled_format<S, internal::compiletime_parts_provider<S>,
+                                 Args...> {
   return format_str;
 }
 #endif
 
 template <typename... Args, typename Char, size_t N>
-auto compile(const Char (&format_str)[N]) -> internal::prepared_format<
-    std::basic_string<Char>,
-    internal::runtime_parts_provider<std::vector<internal::format_part<Char>>>,
-    Args...> {
+auto compile(const Char (&format_str)[N]) -> internal::compiled_format<
+    std::basic_string<Char>, internal::runtime_parts_provider<Char>, Args...> {
   return std::basic_string<Char>(format_str, N - 1);
 }
 
